@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ocean Wave Simulation</title>
+
+  <!-- Reliable CDN for three.js and OrbitControls (works on GitHub Pages) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
+
+  <style>
+    :root{
+      --panel-bg: rgba(8,12,18,0.5);
+      --muted: rgba(255,255,255,0.78);
+      --accent: #679edd;
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#02111a 0%, #062433 60%, #0b2740 100%);color:var(--muted);-webkit-font-smoothing:antialiased;}
+    #app{position:relative;height:100vh;display:block;overflow:hidden}
+
+    /* canvas fills area */
+    canvas{display:block;width:100%;height:100vh;object-fit:cover;touch-action: none;}
+
+    /* UI card */
+    .ui {
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      width: 300px;
+      max-width: calc(100% - 36px);
+      background: var(--panel-bg);
+      border-radius: 12px;
+      padding: 14px;
+      backdrop-filter: blur(6px);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+      color:var(--muted);
+      z-index: 20;
+    }
+    .ui h1 { margin:0 0 8px 0; font-size:18px; color:#e9f6ff; }
+    label{font-size:13px;display:block;margin-top:10px;color:rgba(255,255,255,0.85);}
+    .row{display:flex;gap:8px;align-items:center}
+    input[type="range"]{width:100%}
+    .controls { display:flex; gap:8px; margin-top:10px; }
+    button{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:8px 10px;border-radius:8px;color:var(--muted);cursor:pointer}
+    button.primary{background:linear-gradient(90deg,var(--accent),#4aa0e0);border:none;color:white}
+    .small{font-size:12px;color:rgba(255,255,255,0.65);margin-top:8px}
+    footer{position:fixed;left:18px;bottom:18px;color:rgba(255,255,255,0.45);font-size:11px}
+    @media (max-width:720px){ .ui{width:88%;left:6%;top:12px} }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="ui" class="ui" role="region" aria-label="Ocean controls">
+      <h1>Ocean Wave Simulation</h1>
+      <div class="small">Calming waves with adjustable wind, height and sound (tap Start Sound).</div>
+
+      <label for="wind">Wind Speed <span id="windVal" style="float:right">1.0</span></label>
+      <input id="wind" type="range" min="0" max="6" step="0.1" value="1">
+
+      <label for="height">Wave Height <span id="heightVal" style="float:right">0.7</span></label>
+      <input id="height" type="range" min="0.1" max="2.2" step="0.05" value="0.7">
+
+      <div class="controls">
+        <button id="startSound" class="primary">Start Sound</button>
+        <button id="muteBtn">Mute</button>
+      </div>
+      <div id="audioStatus" class="small">Audio: stopped</div>
+    </div>
+
+    <footer>Rendered with three.js • Procedural audio via Web Audio API</footer>
+  </div>
+
+  <script>
+  // ======== Scene & Renderer ========
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x041a27);
+  scene.fog = new THREE.FogExp2(0x041a27, 0.0022);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha:false });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  document.getElementById('app').appendChild(renderer.domElement);
+
+  const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.1, 2000);
+  camera.position.set(-18, 8, 22);
+
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.maxPolarAngle = Math.PI * 0.495;
+  controls.minDistance = 8;
+  controls.maxDistance = 120;
+  controls.enableDamping = true;
+
+  window.addEventListener('resize', () => {
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+  });
+
+  // ======== Lights ========
+  const ambient = new THREE.AmbientLight(0xb8e1ff, 0.32);
+  scene.add(ambient);
+  const dirLight = new THREE.DirectionalLight(0xfff7e6, 0.9);
+  dirLight.position.set(40, 36, -18);
+  scene.add(dirLight);
+
+  // ======== Water mesh (simple, performant) ========
+  // moderate vertex count so phones run smoothly
+  const SIZE = 200;
+  const SEG = 200; // 200x200 = 40k vertices -> ok for modern phones; reduce to 128 if needed
+  const geometry = new THREE.PlaneGeometry(SIZE, SIZE, SEG, SEG);
+  geometry.rotateX(-Math.PI/2);
+
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x0f5f78,
+    roughness: 0.7,
+    metalness: 0.05,
+    flatShading: false,
+    side: THREE.FrontSide
+  });
+
+  const ocean = new THREE.Mesh(geometry, material);
+  ocean.receiveShadow = false;
+  scene.add(ocean);
+
+  // optional subtle distant plane to hide horizon edge
+  const bg = new THREE.Mesh(new THREE.PlaneGeometry(800, 800), new THREE.MeshBasicMaterial({color:0x031a2a}));
+  bg.rotation.x = -Math.PI/2;
+  bg.position.y = -80;
+  scene.add(bg);
+
+  // ======== Controls & UI binding ========
+  const windEl = document.getElementById('wind');
+  const heightEl = document.getElementById('height');
+  const windVal = document.getElementById('windVal');
+  const heightVal = document.getElementById('heightVal');
+
+  windVal.textContent = parseFloat(windEl.value).toFixed(1);
+  heightVal.textContent = parseFloat(heightEl.value).toFixed(2);
+
+  windEl.addEventListener('input', () => { windVal.textContent = parseFloat(windEl.value).toFixed(1); updateAudioParams(); });
+  heightEl.addEventListener('input', () => { heightVal.textContent = parseFloat(heightEl.value).toFixed(2); });
+
+  // ======== Wave animation (simple Gerstner-like mix) ========
+  const positions = geometry.attributes.position;
+  const basePositions = new Float32Array(positions.array); // copy base positions
+  let elapsed = 0;
+
+  function updateWaves(dt){
+    const wind = parseFloat(windEl.value);
+    const amp = parseFloat(heightEl.value);
+
+    // small combination of sin/cos for believable motion
+    for(let i=0;i<positions.count;i++){
+      const ix = i*3;
+      const x = basePositions[ix];
+      const y = basePositions[ix+1]; // unused baseline y
+      const z = basePositions[ix+2];
+
+      // combine three wave layers with different frequencies & directions
+      const w1 = Math.sin((x*0.06 + z*0.02) + elapsed * (0.8 + wind*0.12)) * (amp * 0.9);
+      const w2 = Math.cos((z*0.12 - x*0.03) + elapsed * (1.2 + wind*0.18)) * (amp * 0.5);
+      const w3 = Math.sin((x*0.24 + z*0.18) + elapsed * (2.1 + wind*0.28)) * (amp * 0.18);
+
+      const newY = w1 + w2 + w3;
+      positions.array[ix+1] = newY;
+    }
+    positions.needsUpdate = true;
+
+    // subtle normal smoothing: recompute normals so lighting looks good
+    geometry.computeVertexNormals();
+    elapsed += dt * 0.9;
+  }
+
+  // ======== Audio: simple procedural layers (requires user gesture) ========
+  let audioCtx = null;
+  let masterGain = null;
+  let noiseSource = null;
+  let lowOsc = null;
+  let noiseFilter = null;
+  let isPlaying = false;
+
+  const startSoundBtn = document.getElementById('startSound');
+  const muteBtn = document.getElementById('muteBtn');
+  const audioStatus = document.getElementById('audioStatus');
+
+  function createAudio(){
+    if(audioCtx) return;
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.0; // start silent until user toggles
+    masterGain.connect(audioCtx.destination);
+
+    // create noise buffer source for "surf" texture
+    const bufferSize = 2 * audioCtx.sampleRate;
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i=0;i<bufferSize;i++){
+      data[i] = (Math.random()*2 - 1) * (0.6 + 0.4 * Math.sin(i * 0.0005)); // shaped noise
+    }
+    noiseSource = audioCtx.createBufferSource();
+    noiseSource.buffer = buffer;
+    noiseSource.loop = true;
+
+    // bandpass to get mid surf
+    noiseFilter = audioCtx.createBiquadFilter();
+    noiseFilter.type = 'bandpass';
+    noiseFilter.frequency.value = 900;
+    noiseFilter.Q.value = 0.8;
+
+    // low slow oscillator for swell
+    lowOsc = audioCtx.createOscillator();
+    lowOsc.type = 'sine';
+    lowOsc.frequency.value = 0.12;
+    const lowGain = audioCtx.createGain();
+    lowGain.gain.value = 0.35;
+
+    // connect
+    noiseSource.connect(noiseFilter);
+    noiseFilter.connect(masterGain);
+    lowOsc.connect(lowGain);
+    lowGain.connect(masterGain);
+
+    // stereo widen using stereo panner with subtle LFO
+    const panner = audioCtx.createStereoPanner();
+    panner.pan.value = 0;
+    masterGain.disconnect();
+    masterGain.connect(panner);
+    panner.connect(audioCtx.destination);
+
+    noiseSource.start();
+    lowOsc.start();
+  }
+
+  function startAudio(){
+    createAudio();
+    if(audioCtx.state === 'suspended'){
+      audioCtx.resume();
+    }
+    // ramp master gain up
+    masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+    masterGain.gain.setTargetAtTime(0.85, audioCtx.currentTime, 0.6);
+    isPlaying = true;
+    audioStatus.textContent = 'Audio: playing';
+    startSoundBtn.textContent = 'Stop Sound';
+    updateAudioParams();
+  }
+
+  function stopAudio(){
+    if(!audioCtx) return;
+    // ramp down
+    masterGain.gain.cancelScheduledValues(audioCtx.currentTime);
+    masterGain.gain.setTargetAtTime(0.0, audioCtx.currentTime, 0.6);
+    isPlaying = false;
+    audioStatus.textContent = 'Audio: stopped';
+    startSoundBtn.textContent = 'Start Sound';
+  }
+
+  function toggleMute(){
+    if(!audioCtx) return;
+    const current = masterGain.gain.value;
+    if(current > 0.05){
+      masterGain.gain.setTargetAtTime(0.0, audioCtx.currentTime, 0.2);
+      audioStatus.textContent = 'Audio: muted';
+      muteBtn.textContent = 'Unmute';
+    } else {
+      masterGain.gain.setTargetAtTime(0.85, audioCtx.currentTime, 0.4);
+      audioStatus.textContent = 'Audio: playing';
+      muteBtn.textContent = 'Mute';
+    }
+  }
+
+  function updateAudioParams(){
+    if(!audioCtx) return;
+    const wind = parseFloat(windEl.value);
+    // change filter & low osc frequency based on wind/height
+    if(noiseFilter) noiseFilter.frequency.setTargetAtTime(400 + Math.min(3000, wind*350), audioCtx.currentTime, 0.2);
+    if(lowOsc) lowOsc.frequency.setTargetAtTime(0.06 + wind * 0.05, audioCtx.currentTime, 0.4);
+    // masterGain is controlled on start/stop/mute
+  }
+
+  // bind UI buttons
+  startSoundBtn.addEventListener('click', () => {
+    if(!isPlaying) startAudio(); else stopAudio();
+  });
+  muteBtn.addEventListener('click', () => toggleMute());
+
+  // ensure mobile gesture requirement: first click will resume/create audio context
+  startSoundBtn.addEventListener('touchstart', () => { if(!audioCtx) createAudio(); }, {passive:true});
+
+  // ======== Animation loop ========
+  let last = performance.now();
+  function loop(now){
+    const dt = (now - last) / 1000;
+    last = now;
+
+    updateWaves(dt);
+
+    controls.update();
+    renderer.render(scene, camera);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // small touch: clicking the canvas nudges wind direction (light effect)
+  renderer.domElement.addEventListener('click', () => {
+    // a tiny sun movement to give feeling of change
+    dirLight.position.x *= -1;
+  });
+
+  // initial camera update so view is correct
+  controls.update();
+
+  // Safety: if WebGL not available, show friendly message
+  if(!renderer.capabilities.isWebGL2 && !renderer.capabilities.isWebGL1){
+    const msg = document.createElement('div');
+    msg.style.position='absolute';
+    msg.style.left='50%';
+    msg.style.top='50%';
+    msg.style.transform='translate(-50%,-50%)';
+    msg.style.color='white';
+    msg.style.background='rgba(0,0,0,0.5)';
+    msg.style.padding='12px 18px';
+    msg.style.borderRadius='8px';
+    msg.textContent = 'WebGL not supported in this browser.';
+    document.body.appendChild(msg);
+  }
+  </script>
+</body>
+  </html>
