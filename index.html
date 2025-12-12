@@ -1,0 +1,459 @@
+<!doctype html>
+
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ocean Wave Simulation</title>
+  <script src="https://unpkg.com/three@0.158.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
+  <style>
+    :root{
+      --glass-bg: rgba(255,255,255,0.06);
+      --accent: rgba(103, 158, 223, 0.9);
+      --muted: rgba(255,255,255,0.7);
+      --panel: rgba(7,12,20,0.45);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#02111a 0%, #062433 50%, #0b2740 100%);color:var(--muted);}
+    #app{height:100vh;display:grid;grid-template-columns:1fr 360px;gap:24px;padding:28px;box-sizing:border-box}/* Canvas area */
+.stage{position:relative;border-radius:16px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,0.6);backdrop-filter: blur(6px);}
+canvas{display:block;width:100%;height:100%;}
+
+/* Right panel */
+.panel{padding:18px;border-radius:14px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));box-shadow:inset 0 1px 0 rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03)}
+h1{margin:0 0 10px 0;font-size:20px;color:#e8f6ff}
+p.lead{margin:0 0 18px 0;color:rgba(255,255,255,0.65);font-size:12.5px}
+
+.control{margin-bottom:14px}
+label{display:block;font-size:12px;margin-bottom:6px;color:rgba(255,255,255,0.8)}
+.row{display:flex;gap:8px}
+input[type=range]{width:100%}
+.value{min-width:48px;text-align:right;font-weight:600;color:var(--accent)}
+
+.btns{display:flex;gap:8px;margin-top:8px}
+button{background:var(--panel);border:1px solid rgba(255,255,255,0.04);padding:8px 12px;border-radius:10px;color:var(--muted);cursor:pointer}
+button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.06)}
+.status{margin-top:12px;font-size:13px;color:rgba(255,255,255,0.7)}
+
+footer{position:fixed;left:18px;bottom:18px;color:rgba(255,255,255,0.5);font-size:12px}
+
+/* small-screen adjustments */
+@media (max-width:900px){#app{grid-template-columns:1fr;padding:14px} .panel{position:fixed;right:14px;top:14px;width:320px;opacity:0.98}}
+
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="stage panel" id="stage">
+      <!-- three.js canvas will be appended here -->
+      <div style="position:absolute;left:20px;top:18px;color:rgba(255,255,255,0.9);z-index:5">
+        <div style="font-weight:700;font-size:18px">Ocean Wave Simulation</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.7)">Calming, realistic waves & sound</div>
+      </div>
+      <div id="hint" style="position:absolute;bottom:22px;left:22px;color:rgba(255,255,255,0.85);font-size:13px;z-index:5">Use the controls to shape wind, waves & lighting — click & drag to orbit.</div>
+    </div><aside class="panel">
+  <h1>Controls</h1>
+  <p class="lead">Adjust wind speed, wave height, and lighting. Tap <em>Start Sound</em> to enable realistic ocean audio (requires user gesture).</p>
+
+  <div class="control">
+    <label>Wind Speed <span id="windVal" class="value">6.0</span></label>
+    <div class="row"><input id="wind" type="range" min="0" max="12" step="0.1" value="6"></div>
+  </div>
+
+  <div class="control">
+    <label>Wave Height <span id="heightVal" class="value">1.2</span></label>
+    <div class="row"><input id="height" type="range" min="0" max="3" step="0.01" value="1.2"></div>
+  </div>
+
+  <div class="control">
+    <label>Lighting (Sun Intensity) <span id="lightVal" class="value">0.9</span></label>
+    <div class="row"><input id="light" type="range" min="0" max="2" step="0.01" value="0.9"></div>
+  </div>
+
+  <div class="control">
+    <label>Time of Day</label>
+    <div class="row">
+      <select id="preset" style="flex:1;padding:8px;border-radius:8px;background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)">
+        <option value="dawn">Dawn</option>
+        <option value="noon">Noon</option>
+        <option value="dusk" selected>Dusk</option>
+        <option value="night">Night</option>
+      </select>
+      <button id="reset">Reset</button>
+    </div>
+  </div>
+
+  <div class="control">
+    <label>Sound</label>
+    <div class="row">
+      <button id="startSound">Start Sound</button>
+      <button id="mute" class="ghost">Mute</button>
+    </div>
+    <div class="status" id="audioStatus">Audio: stopped</div>
+  </div>
+
+  <div class="control">
+    <label>Presets</label>
+    <div class="row btns">
+      <button id="presetCalm">Calm</button>
+      <button id="presetBreezy">Breezy</button>
+      <button id="presetStorm">Storm</button>
+    </div>
+  </div>
+
+  <div style="margin-top:8px;font-size:12px;color:rgba(255,255,255,0.55)">Tip: For best effect, wear headphones. Sound will spatialize with wind direction.</div>
+</aside>
+
+  </div>  <footer>Rendered with three.js • Procedural audio via Web Audio API</footer>  <script>
+  // --- Scene setup ---
+  const container = document.getElementById('stage');
+  const scene = new THREE.Scene();
+  const renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  container.appendChild(renderer.domElement);
+
+  // Camera & controls
+  const camera = new THREE.PerspectiveCamera(45, container.clientWidth/container.clientHeight, 0.1, 2000);
+  camera.position.set(-30, 12, 30);
+  const controls = new THREE.OrbitControls(camera, renderer.domElement);
+  controls.maxPolarAngle = Math.PI * 0.495;
+  controls.minDistance = 10;
+  controls.maxDistance = 120;
+
+  window.addEventListener('resize', onWindowResize);
+  function onWindowResize(){
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    camera.aspect = container.clientWidth / container.clientHeight;
+    camera.updateProjectionMatrix();
+  }
+
+  // Lights
+  const ambient = new THREE.AmbientLight(0xb8e1ff, 0.35);
+  scene.add(ambient);
+  const dirLight = new THREE.DirectionalLight(0xfff9e8, 0.9);
+  dirLight.position.set(50, 40, -20);
+  scene.add(dirLight);
+
+  // Sky gradient by scene background (simple)
+  scene.background = new THREE.Color(0x041a27);
+
+  // Water surface using Gerstner waves in a ShaderMaterial
+  const size = 240;
+  const segments = 256; // reasonable detail
+  const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
+  geometry.rotateX(-Math.PI/2);
+
+  // Vertex + fragment shader implementing multiple Gerstner waves
+  const vertexShader = `
+    uniform float uTime;
+    uniform float uAmplitude;
+    uniform float uWind;
+    uniform vec2 uWindDir;
+    varying vec3 vPos;
+    varying vec3 vNormal;
+    varying vec3 vViewPos;
+
+    // Gerstner wave function
+    vec3 gerstnerWave(vec3 pos, float A, float lambda, float speed, vec2 dir, float steep){
+      float k = 2.0 * 3.141592 / lambda;
+      float f = dot(dir, pos.xz) * k + uTime * speed;
+      float cosf = cos(f);
+      float sinf = sin(f);
+      vec3 displacement;
+      displacement.x = dir.x * (A * cosf * steep);
+      displacement.z = dir.y * (A * cosf * steep);
+      displacement.y = A * sinf;
+      return displacement;
+    }
+
+    void main(){
+      vec3 pos = position;
+      // combine a few octaves
+      float amp = uAmplitude;
+      float wind = uWind;
+      vec2 windDir = normalize(uWindDir);
+
+      vec3 d1 = gerstnerWave(pos, amp * 0.9, 30.0, 0.12 * wind, windDir, 0.8);
+      vec3 d2 = gerstnerWave(pos, amp * 0.45, 12.0, 0.18 * wind, vec2(windDir.x*0.8, windDir.y*1.1), 0.6);
+      vec3 d3 = gerstnerWave(pos, amp * 0.18, 6.0, 0.28 * wind, vec2(-windDir.y, windDir.x), 0.5);
+
+      vec3 displaced = pos + d1 + d2 + d3;
+      vPos = displaced;
+
+      // approximate normal by partial derivatives (finite difference)
+      vec3 tangent = vec3(1.0,0.0,0.0);
+      vec3 bitangent = vec3(0.0,0.0,1.0);
+      vec3 p1 = pos + vec3(0.001,0.0,0.0);
+      vec3 p2 = pos + vec3(0.0,0.0,0.001);
+      vec3 dp1 = (gerstnerWave(p1, amp * 0.9, 30.0, 0.12 * wind, windDir, 0.8) +
+                  gerstnerWave(p1, amp * 0.45, 12.0, 0.18 * wind, vec2(windDir.x*0.8, windDir.y*1.1), 0.6) +
+                  gerstnerWave(p1, amp * 0.18, 6.0, 0.28 * wind, vec2(-windDir.y, windDir.x), 0.5));
+      vec3 dp2 = (gerstnerWave(p2, amp * 0.9, 30.0, 0.12 * wind, windDir, 0.8) +
+                  gerstnerWave(p2, amp * 0.45, 12.0, 0.18 * wind, vec2(windDir.x*0.8, windDir.y*1.1), 0.6) +
+                  gerstnerWave(p2, amp * 0.18, 6.0, 0.28 * wind, vec2(-windDir.y, windDir.x), 0.5));
+      vec3 pos1 = p1 + dp1;
+      vec3 pos2 = p2 + dp2;
+      vec3 n = normalize(cross(pos2 - displaced, pos1 - displaced));
+      vNormal = n;
+
+      vec4 mvPosition = modelViewMatrix * vec4(displaced, 1.0);
+      vViewPos = -mvPosition.xyz;
+      gl_Position = projectionMatrix * mvPosition;
+    }
+  `;
+
+  const fragmentShader = `
+    uniform vec3 uLightDir;
+    uniform vec3 uLightColor;
+    uniform vec3 uDeepColor;
+    uniform vec3 uShallowColor;
+    varying vec3 vPos;
+    varying vec3 vNormal;
+    varying vec3 vViewPos;
+
+    void main(){
+      float fresnel = pow(1.0 - max(0.0, dot(normalize(vNormal), normalize(vViewPos))), 2.0);
+      float slope = clamp(1.0 - dot(normalize(vNormal), vec3(0.0,1.0,0.0)), 0.0, 1.0);
+      // depth-based color mix
+      float depthFactor = smoothstep(-1.6, 4.0, vPos.y);
+      vec3 base = mix(uDeepColor, uShallowColor, depthFactor);
+
+      // lighting
+      vec3 light = normalize(uLightDir);
+      float ndotl = max(0.0, dot(normalize(vNormal), light));
+      vec3 lit = base * (0.35 + ndotl * 0.65) * uLightColor;
+
+      // white caps
+      float whitecap = smoothstep(0.5, 0.9, slope + (1.0 - depthFactor) * 0.3) * (1.0 - smoothstep(0.0, 0.8, ndotl));
+      vec3 color = mix(lit, vec3(1.0, 1.0, 1.0), whitecap * 0.8);
+      // add subtle fresnel
+      color = mix(color, vec3(0.9,0.98,1.0), fresnel * 0.15);
+
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `;
+
+  const material = new THREE.ShaderMaterial({
+    transparent: false,
+    vertexShader,
+    fragmentShader,
+    uniforms: {
+      uTime: {value:0},
+      uAmplitude: {value:1.2},
+      uWind: {value:6.0},
+      uWindDir: {value:new THREE.Vector2(0.8, -0.6)},
+      uLightDir: {value: new THREE.Vector3(0.5, 0.8, -0.2).normalize()},
+      uLightColor: {value: new THREE.Color(1.0, 0.95, 0.9)},
+      uDeepColor: {value: new THREE.Color(0.01,0.06,0.12)},
+      uShallowColor: {value: new THREE.Color(0.08,0.20,0.32)}
+    }
+  });
+
+  const ocean = new THREE.Mesh(geometry, material);
+  ocean.receiveShadow = true;
+  scene.add(ocean);
+
+  // Add a subtle fog to blend horizon
+  scene.fog = new THREE.FogExp2(0x041a27, 0.0025);
+
+  // Add a low poly sun for lighting direction
+  const sunGeo = new THREE.SphereGeometry(2.6, 24, 12);
+  const sunMat = new THREE.MeshBasicMaterial({color:0xffbf82, transparent:true, opacity:0.95});
+  const sun = new THREE.Mesh(sunGeo, sunMat);
+  sun.position.set(50,30,-10);
+  scene.add(sun);
+
+  // Small helper: horizon plane far away to reflect light subtly
+  const bgGeo = new THREE.PlaneGeometry(1000,1000);
+  const bgMat = new THREE.MeshBasicMaterial({color:0x032433, side:THREE.BackSide});
+  const bg = new THREE.Mesh(bgGeo, bgMat);
+  bg.rotation.x = Math.PI/2;
+  bg.position.y = -60;
+  scene.add(bg);
+
+  // UI elements
+  const windEl = document.getElementById('wind');
+  const heightEl = document.getElementById('height');
+  const lightEl = document.getElementById('light');
+  const windVal = document.getElementById('windVal');
+  const heightVal = document.getElementById('heightVal');
+  const lightVal = document.getElementById('lightVal');
+
+  // Presets
+  document.getElementById('presetCalm').addEventListener('click', ()=>applyPreset(2.2,0.45,0.5));
+  document.getElementById('presetBreezy').addEventListener('click', ()=>applyPreset(6.0,1.2,0.9));
+  document.getElementById('presetStorm').addEventListener('click', ()=>applyPreset(11.5,2.6,1.4));
+
+  function applyPreset(w,h,l){windEl.value=w;heightEl.value=h;lightEl.value=l;updateUI();}
+
+  document.getElementById('preset').addEventListener('change',(e)=>{
+    const v=e.target.value;
+    if(v==='dawn'){renderer.setClearColor(0x0b2430); sun.position.set(40,18,-8); dirLight.color.setHex(0xffeecf); ambient.intensity=0.22}
+    if(v==='noon'){renderer.setClearColor(0x7fbfd8); sun.position.set(30,60,10); dirLight.color.setHex(0xffffff); ambient.intensity=0.55}
+    if(v==='dusk'){renderer.setClearColor(0x041a27); sun.position.set(50,30,-10); dirLight.color.setHex(0xffe0b2); ambient.intensity=0.35}
+    if(v==='night'){renderer.setClearColor(0x010615); sun.position.set(-10,8,20); dirLight.color.setHex(0xcfe8ff); ambient.intensity=0.12}
+  });
+
+  document.getElementById('reset').addEventListener('click', ()=>{applyPreset(6.0,1.2,0.9); document.getElementById('preset').value='dusk'; updateUI();});
+
+  function updateUI(){
+    const wind = parseFloat(windEl.value);
+    const h = parseFloat(heightEl.value);
+    const l = parseFloat(lightEl.value);
+    windVal.textContent = wind.toFixed(1);
+    heightVal.textContent = h.toFixed(2);
+    lightVal.textContent = l.toFixed(2);
+    material.uniforms.uWind.value = wind;
+    material.uniforms.uAmplitude.value = h;
+    dirLight.intensity = l;
+    sun.material.opacity = Math.min(1.0, 0.6 + l*0.6);
+    material.uniforms.uLightColor.value = new THREE.Color(1.0, 0.95, 0.9).multiplyScalar(Math.min(1.6, 0.6 + l*0.7));
+    ambient.intensity = 0.25 + l*0.18;
+  }
+
+  windEl.addEventListener('input', updateUI);
+  heightEl.addEventListener('input', updateUI);
+  lightEl.addEventListener('input', updateUI);
+
+  updateUI();
+
+  // Animation loop
+  let clock = new THREE.Clock();
+  function animate(){
+    requestAnimationFrame(animate);
+    const t = clock.getElapsedTime();
+    material.uniforms.uTime.value = t * 0.9;
+
+    // gently move sun / light a touch for realism
+    sun.rotation.y += 0.0004;
+    dirLight.position.copy(sun.position).multiplyScalar(1.0);
+    material.uniforms.uLightDir.value = dirLight.position.clone().normalize();
+
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // --- Procedural audio: layered noise + filtered low frequencies to simulate ocean ---
+  let audioCtx=null, masterGain=null, noiseNode=null, lowOsc=null, highOsc=null, bpFilter=null, lpFilter=null, panner=null;
+  let isPlaying=false;
+  const startBtn = document.getElementById('startSound');
+  const muteBtn = document.getElementById('mute');
+  const audioStatus = document.getElementById('audioStatus');
+
+  startBtn.addEventListener('click', async ()=>{
+    if(!audioCtx){
+      audioInit();
+    }
+    if(!isPlaying){
+      await audioCtx.resume();
+      masterGain.gain.value = 0.9;
+      audioStatus.textContent = 'Audio: playing';
+      startBtn.textContent = 'Stop Sound';
+      isPlaying=true;
+      updateAudioFromUI();
+    } else {
+      masterGain.gain.value = 0.0;
+      audioStatus.textContent = 'Audio: stopped';
+      startBtn.textContent = 'Start Sound';
+      isPlaying=false;
+    }
+  });
+
+  muteBtn.addEventListener('click', ()=>{
+    if(!audioCtx) return;
+    if(masterGain.gain.value>0.01){masterGain.gain.value=0.0; muteBtn.textContent='Unmute'; audioStatus.textContent='Audio: muted'}
+    else{masterGain.gain.value=0.9; muteBtn.textContent='Mute'; audioStatus.textContent='Audio: playing'}
+  });
+
+  function audioInit(){
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = audioCtx.createGain(); masterGain.gain.value=0.0; masterGain.connect(audioCtx.destination);
+    // noise source
+    const bufferSize = 2 * audioCtx.sampleRate; // 2 seconds
+    const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i=0;i<bufferSize;i++) data[i] = (Math.random()*2-1) * Math.exp(-i/bufferSize*0.5);
+    noiseNode = audioCtx.createBufferSource(); noiseNode.buffer = buffer; noiseNode.loop = true;
+    // filters
+    bpFilter = audioCtx.createBiquadFilter(); bpFilter.type='bandpass'; bpFilter.frequency.value=800; bpFilter.Q.value=0.7;
+    lpFilter = audioCtx.createBiquadFilter(); lpFilter.type='lowpass'; lpFilter.frequency.value=1200; lpFilter.Q.value=0.7;
+    noiseNode.connect(bpFilter);
+    bpFilter.connect(lpFilter);
+
+    // low frequency swell oscillator
+    lowOsc = audioCtx.createOscillator(); lowOsc.type='sine'; lowOsc.frequency.value = 0.12; // slow
+    const lowGain = audioCtx.createGain(); lowGain.gain.value = 0.6;
+    lowOsc.connect(lowGain);
+
+    // higher-frequency breath
+    highOsc = audioCtx.createOscillator(); highOsc.type='sine'; highOsc.frequency.value = 1.8;
+    const highGain = audioCtx.createGain(); highGain.gain.value = 0.07;
+    highOsc.connect(highGain);
+
+    // panner for direction
+    panner = audioCtx.createStereoPanner(); panner.pan.value = 0;
+
+    // connect chain
+    lpFilter.connect(panner);
+    lowGain.connect(panner);
+    highGain.connect(panner);
+    panner.connect(masterGain);
+
+    lowOsc.start(); highOsc.start(); noiseNode.start();
+
+    // subtle LFO to widen stereo
+    const lfo = audioCtx.createOscillator(); lfo.frequency.value = 0.05;
+    const lfoGain = audioCtx.createGain(); lfoGain.gain.value = 0.9;
+    lfo.connect(lfoGain);
+    lfoGain.connect(panner.pan);
+    lfo.start();
+
+    // reactive update on UI
+    updateAudioFromUI();
+  }
+
+  function updateAudioFromUI(){
+    if(!audioCtx) return;
+    const wind = parseFloat(windEl.value);
+    const h = parseFloat(heightEl.value);
+    // map wind to filter and oscillator frequency
+    const bpFreq = 400 + Math.min(2200, wind * 220);
+    const lpFreq = 1200 + wind * 140;
+    bpFilter.frequency.setTargetAtTime(bpFreq, audioCtx.currentTime, 0.2);
+    lpFilter.frequency.setTargetAtTime(lpFreq, audioCtx.currentTime, 0.2);
+    // swell depth -> low oscillator amplitude and noise gain
+    // masterGain controls overall loudness
+    masterGain.gain.setTargetAtTime(0.9 * Math.min(1.0, h/2.5 + wind/20), audioCtx.currentTime, 0.5);
+    // change lowOsc frequency slightly
+    lowOsc.frequency.setTargetAtTime(0.06 + (wind/40) + (h/20), audioCtx.currentTime, 0.8);
+    // panner based on wind direction (use material.uWindDir x)
+    const pan = material.uniforms.uWindDir.value.x * 0.9;
+    panner.pan.setTargetAtTime(pan, audioCtx.currentTime, 0.5);
+  }
+
+  // update audio whenever UI changes
+  [windEl, heightEl].forEach(el=>el.addEventListener('input', ()=>{updateUI(); updateAudioFromUI();}))
+
+  // Randomize wind direction slowly for realism
+  setInterval(()=>{
+    const angle = (Math.random()*2 -1) * 0.6 + Math.atan2(material.uniforms.uWindDir.value.y, material.uniforms.uWindDir.value.x);
+    material.uniforms.uWindDir.value.set(Math.cos(angle), Math.sin(angle));
+  }, 8000);
+
+  // small touch: click stage to nudge wind
+  container.addEventListener('click', ()=>{
+    material.uniforms.uWindDir.value.x *= -1.0;
+    updateAudioFromUI();
+  });
+
+  // initial camera framing
+  controls.update();
+
+  // --- End of script ---
+  </script></body>
+  </html>
